@@ -1,0 +1,20 @@
+# Dependências
+node_modules/
+
+# Gerados pelo engine ao carregar o mod (tipos e tsconfig locais)
+.claude-plugin/types/
+**/.claude-plugin/types/
+**/.claude-plugin/tsconfig.json
+
+# Logs e temporários
+*.log
+.DS_Store
+Thumbs.db
+
+# Segredos locais
+.env
+.env.*
+
+# Editor
+.vscode/
+.idea/
