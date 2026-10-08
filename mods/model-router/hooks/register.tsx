@@ -30,7 +30,6 @@ import {
   ratesFor,
   tierEffort,
   tierOfFamily,
-  usd,
   writeRate,
 } from './pricing'
 import type { Ttl } from './pricing'
@@ -40,6 +39,7 @@ import {
   liveLines,
   modelLabel,
   modelsLines,
+  pct,
   shadowLines,
   subagentSummary,
   turnsLines,
@@ -56,6 +56,7 @@ const bandHidden = atom({ plugin: 'model-router', key: 'bandHidden' } as const, 
 const live = atom({ plugin: 'model-router', key: 'live' } as const, null)
 const view = atom({ plugin: 'model-router', key: 'view' } as const, 'turnos')
 const selected = atom({ plugin: 'model-router', key: 'selected' } as const, null)
+const confirmReset = atom({ plugin: 'model-router', key: 'confirmReset' } as const, false)
 const totals = atom({ plugin: 'model-router', key: 'totals' } as const, {
   turns: 0,
   cost: 0,
@@ -410,7 +411,7 @@ async function decide($: EngineInterface, text: string, forced?: Family): Promis
 function notify($: EngineInterface, d: Decision): void {
   if (st.mode === 'sombra') return
   if (d.verdict === 'forcado' && d.savings < 0) {
-    $.ui.toast(`⚠ ${MODELS[d.wanted].label} forçado: custa ~${usd(-d.savings)} a mais que ficar onde estava.`)
+    $.ui.toast(`⚠ ${MODELS[d.wanted].label} forçado: pode sair mais caro que ficar onde estava.`)
   } else if (d.reason.startsWith('escalado')) {
     $.ui.toast(`↑ ${MODELS[d.family].label}: ${d.reason}`)
   }
@@ -427,11 +428,12 @@ async function refreshStatus($: EngineInterface): Promise<void> {
   const slot = st.warm
   const now = slot ? modelLabel(slot.family, slot.effort) : '—'
   if (st.mode === 'sombra') {
-    $.ui.status(`👁 sombra · ${now} │ real ${usd(spent)} │ c/ roteador ${usd(routed)} est.`)
+    $.ui.status(`👁 sombra · ${now} │ roteador usaria ${pct(spent - routed, spent)} menos (est.)`)
     return
   }
   const saved = sum(list, r => r.opusCost - r.cost)
-  $.ui.status(`⚡ ${now} │ sessão ${usd(spent)} │ vs Opus ${usd(saved)} est.`)
+  const opus = sum(list, r => r.opusCost)
+  $.ui.status(`⚡ ${now} │ ${pct(saved, opus)} menos que tudo no Opus (est.)`)
 }
 
 async function saveSettings($: EngineInterface): Promise<void> {
@@ -808,65 +810,142 @@ export const register: Register = on => {
     const tab = await read($, view)
     const pick = await read($, selected)
     const allTime = await read($, totals)
+    const askReset = await read($, confirmReset)
 
-    const spent = sum(list, r => r.cost)
-    const routed = sum(list, r => r.routedCost)
     const idleNext = st.warm ? modelLabel(st.warm.family, st.warm.effort) : null
     const top = liveLines(now, idleNext)
-    const room = Math.max(3, (e.viewport?.rows ?? 30) - 9 - top.length)
+    const room = Math.max(3, (e.viewport?.rows ?? 30) - 12 - top.length)
 
     const shownId = pick ?? list.at(-1)?.id ?? null
+    const sessionTotal = sum(list, r => r.cost)
     const body: Line[] =
       tab === 'modelos'
         ? modelsLines(list)
         : tab === 'detalhe'
-          ? detailLines(list.find(r => r.id === shownId))
+          ? detailLines(list.find(r => r.id === shownId), sessionTotal)
           : tab === 'sombra'
             ? shadowLines(list, allTime)
             : turnsLines(list, pick, room)
-    const modeText = cfg.mode === 'sombra' ? '👁 modo sombra (só mede)' : '⚡ modo ativo'
+    const modeText = !cfg.enabled
+      ? 'Desligado: tudo roda no modelo que você escolheu'
+      : cfg.mode === 'sombra'
+        ? 'Modo sombra: só mede, não troca nada'
+        : 'Modo ativo: o roteador aplica as decisões'
+
+    const tabs: { id: PaneView; label: string; key: string }[] = [
+      { id: 'turnos', label: 'Turnos', key: 't' },
+      { id: 'modelos', label: 'Modelos', key: 'm' },
+      { id: 'detalhe', label: 'Detalhe', key: 'd' },
+      { id: 'sombra', label: 'Sombra', key: 's' },
+    ]
+
+    const actions = [
+      {
+        id: 'mode',
+        label: cfg.mode === 'sombra' ? 'Ativar roteamento' : 'Voltar à sombra',
+        tip:
+          cfg.mode === 'sombra'
+            ? 'Passa a aplicar as decisões do roteador. Hoje ele só registra o que faria.'
+            : 'Para de aplicar as decisões e volta a só medir.',
+        onPress: () => setMode($, st.mode === 'sombra' ? 'ativo' : 'sombra'),
+      },
+      {
+        id: 'ai',
+        label: cfg.ai ? 'IA classificadora: ligada' : 'IA classificadora: desligada',
+        tip: 'Um modelo pequeno ajuda a classificar pedidos ambíguos. Acerta mais e gasta um pouco.',
+        onPress: () => {
+          st.ai = !st.ai
+          return saveSettings($)
+        },
+      },
+      {
+        id: 'toggle',
+        label: cfg.enabled ? 'Desligar' : 'Ligar',
+        tip: cfg.enabled
+          ? 'Pausa o roteador. Tudo roda no modelo que você escolheu.'
+          : 'Volta a classificar e registrar os pedidos.',
+        onPress: () => setEnabled($, !st.enabled),
+      },
+      {
+        id: 'reset',
+        label: askReset ? 'Confirmar: zerar tudo' : 'Zerar histórico',
+        tip: askReset
+          ? 'Clique de novo para apagar. Os logs em disco ficam.'
+          : 'Apaga o histórico e as estatísticas aprendidas. Pede confirmação.',
+        onPress: async () => {
+          if (!(await read($, confirmReset))) {
+            await update($, confirmReset, () => true)
+            return
+          }
+          await update($, confirmReset, () => false)
+          await runCommand($, 'reset')
+        },
+      },
+    ]
 
     return (
       <Box flexDirection="column">
-        <Text bold>
-          {PANE_TITLE} · {cfg.enabled ? modeText : 'desligado'} · IA {cfg.ai ? 'ligada' : 'desligada'} · Sessão real{' '}
-          {usd(spent)} · com o roteador {usd(routed)} (est.)
-        </Text>
+        <Text bold>{PANE_TITLE}</Text>
+        <Text dimColor>{modeText}</Text>
         {top.map(line => (
           <Text color={line.color} bold={line.bold} dimColor={line.dim} wrap="truncate-end">
             {line.text}
           </Text>
         ))}
+        <Text> </Text>
         <Box>
-          <Button key="tab-turnos" hotkey="t" label={tab === 'turnos' ? '[Turnos]' : 'Turnos'} onPress={() => update($, view, () => 'turnos' as const)} />
-          <Button key="tab-modelos" hotkey="m" label={tab === 'modelos' ? '[Modelos]' : 'Modelos'} onPress={() => update($, view, () => 'modelos' as const)} />
-          <Button key="tab-detalhe" hotkey="d" label={tab === 'detalhe' ? '[Detalhe]' : 'Detalhe'} onPress={() => update($, view, () => 'detalhe' as const)} />
-          <Button key="tab-sombra" hotkey="s" label={tab === 'sombra' ? '[Sombra]' : 'Sombra'} onPress={() => update($, view, () => 'sombra' as const)} />
-          <Button key="prev" hotkey="p" label="◀" onPress={() => moveSelection($, -1)} />
-          <Button key="next" hotkey="n" label="▶" onPress={() => moveSelection($, 1)} />
-          <Button
-            key="mode"
-            label={cfg.mode === 'sombra' ? 'Ativar roteamento' : 'Voltar à sombra'}
-            onPress={() => setMode($, st.mode === 'sombra' ? 'ativo' : 'sombra')}
-          />
-          <Button key="toggle" label={cfg.enabled ? 'Desligar' : 'Ligar'} onPress={() => setEnabled($, !st.enabled)} />
-          <Button
-            key="ai"
-            label={cfg.ai ? 'IA: off' : 'IA: on'}
-            onPress={() => {
-              st.ai = !st.ai
-              return saveSettings($)
-            }}
-          />
+          {tabs.map(t => (
+            <Button
+              key={`tab-${t.id}`}
+              hotkey={t.key}
+              label={tab === t.id ? `[${t.label}]` : t.label}
+              onPress={() => update($, view, () => t.id)}
+            />
+          ))}
         </Box>
+        {tab === 'detalhe' ? (
+          <Box>
+            <Button key="prev" hotkey="p" label="◀ turno anterior" onPress={() => moveSelection($, -1)} />
+            <Button key="next" hotkey="n" label="próximo turno ▶" onPress={() => moveSelection($, 1)} />
+          </Box>
+        ) : null}
+        <Text> </Text>
         {body.slice(0, Math.max(room + 1, 8)).map(line => (
           <Text color={line.color} bold={line.bold} dimColor={line.dim} inverse={line.inverse} wrap="truncate-end">
             {line.text || ' '}
           </Text>
         ))}
-        <Text dimColor>
-          Haiku verde · Sonnet ciano · Opus magenta · Fable azul · bloqueado amarelo · valores a preço de lista (est.) ·
-          force com !haiku, !sonnet, !opus
+        <Text> </Text>
+        <Box>
+          {actions.map(a => (
+            <Box key={`btn-${a.id}`} hover={{ scope: `tip-${a.id}` }}>
+              <Button key={a.id} label={a.label} onPress={a.onPress} />
+            </Box>
+          ))}
+        </Box>
+        <Box height={1}>
+          {actions.map(a => (
+            <Box
+              key={`hint-${a.id}`}
+              position="absolute"
+              top={0}
+              left={0}
+              display="none"
+              hover={{ scope: `tip-${a.id}`, display: 'flex' }}
+            >
+              <Text dimColor>{a.tip}</Text>
+            </Box>
+          ))}
+        </Box>
+        <Text> </Text>
+        <Text dimColor wrap="truncate-end">
+          Cores: <Text color={FAMILY_COLOR.haiku}>Haiku</Text> tarefas simples ·{' '}
+          <Text color={FAMILY_COLOR.sonnet}>Sonnet</Text> médias · <Text color={FAMILY_COLOR.opus}>Opus</Text> complexas ·
+          bloqueado em amarelo. Passe o mouse sobre um botão para ver o que ele faz.
+        </Text>
+        <Text dimColor wrap="truncate-end">
+          Para forçar um modelo num pedido, comece o prompt com !haiku, !sonnet ou !opus. Percentuais são estimativas
+          pelo peso do uso.
         </Text>
       </Box>
     )
@@ -883,11 +962,11 @@ export const register: Register = on => {
     if (now) {
       const running = now.subagents.filter(s => !s.isDone)
       const shadow =
-        now.mode === 'sombra' && now.planFamily !== now.family ? ` · 👁 roteador usaria ${MODELS[now.planFamily].label}` : ''
+        now.mode === 'sombra' && now.planFamily !== now.family ? ` · roteador usaria ${MODELS[now.planFamily].label}` : ''
       return (
         <Box>
           <Text color={FAMILY_COLOR[now.family]} wrap="truncate-end">
-            ▶ {modelLabel(now.family, now.effort)} rodando · passo {now.step} · {usd(now.cost)}
+            ▶ {modelLabel(now.family, now.effort)} rodando · passo {now.step}
             {shadow}
             {running.length > 0 ? ` · ↳ ${running.length} subagente(s): ${subagentSummary(running)}` : ''}{' '}
           </Text>

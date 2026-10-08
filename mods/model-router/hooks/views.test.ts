@@ -54,7 +54,7 @@ function text(lines: { text: string }[]): string {
 test('turnos mostram o que rodou e o que o roteador faria', async () => {
   const out = text(turnsLines([turn], 7, 10))
   expect(out.includes('Opus 5.5 · medium')).toBe(true)
-  expect(out.includes('👁 Opus 5.5 · low')).toBe(true)
+  expect(out.includes('Opus 5.5 · low')).toBe(true)
   expect(turnsLines([turn], 7, 10)[1]?.inverse).toBe(true)
 })
 
@@ -67,15 +67,23 @@ test('modelos listam as tarefas de cada um', async () => {
 test('detalhe separa real, roteado e Opus', async () => {
   const out = text(detailLines(turn))
   expect(out.includes('Roteador teria usado: Opus 5.5 · low')).toBe(true)
-  expect(out.includes('Custo real $0.12 · Com o roteador $0.090 (est.)')).toBe(true)
+  expect(out.includes('com o roteador 25% menos (est.)')).toBe(true)
   expect(out.includes('roteador: Haiku 5.5')).toBe(true)
 })
 
 test('sombra soma a economia estimada e avisa amostra pequena', async () => {
   const out = text(shadowLines([turn], { turns: 1, cost: 0.12, routedCost: 0.09, opusCost: 0.12, since: 0 }))
-  expect(out.includes('economia 25%')).toBe(true)
+  expect(out.includes('teria usado 25% menos (est.)')).toBe(true)
   expect(out.includes('amostra pequena (n=1)')).toBe(true)
   expect(out.includes('Explore "buscar chamadas de parse" → Haiku 5.5')).toBe(true)
+})
+
+test('modelos mostram a fatia de cada um e somam 100%', async () => {
+  const haiku = { ...turn, id: 8, family: 'haiku' as const, cost: 0.03, byModel: [{ ...turn.byModel[0]!, family: 'haiku' as const, cost: 0.03 }], subagents: [] }
+  const out = text(modelsLines([{ ...turn, subagents: [] }, haiku]))
+  expect(out.includes('80%')).toBe(true)
+  expect(out.includes('20%')).toBe(true)
+  expect(out.includes('$')).toBe(false)
 })
 
 test('ao vivo e resumo de subagentes', async () => {

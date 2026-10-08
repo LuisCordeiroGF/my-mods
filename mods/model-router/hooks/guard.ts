@@ -1,5 +1,5 @@
 import type { Effort, Family, Verdict } from '../types'
-import { EFFORT_OUTPUT, MODELS, familyRates, kTok, perM, usd, writeRate } from './pricing'
+import { EFFORT_OUTPUT, MODELS, familyRates, kTok, perM, writeRate } from './pricing'
 import type { Ttl } from './pricing'
 
 /** Modelo + effort de uma requisição. Só o modelo é chave do cache: nos 5.5, mudar o effort mantém o cache. */
@@ -39,6 +39,10 @@ export const MIN_SAVING_USD = 0.005
 export const MIN_SAVING_SHARE = 0.15
 /** Acima de 90% da janela de contexto, o modelo não é candidato. */
 const WINDOW_MARGIN = 0.9
+
+function share(part: number, whole: number): string {
+  return whole > 0 ? `${Math.round((part / whole) * 100)}%` : '—'
+}
 
 function outputCost(slot: Slot, tokens: number, contextTokens: number): number {
   const rates = familyRates(slot.family, contextTokens)
@@ -102,13 +106,13 @@ export function evaluateSwitch(i: SwitchInput): SwitchVerdict {
   const savings = stayCost - switchCost
   const numbers = { toll, stayCost, switchCost, savings }
   const cold = i.isCacheCold ? 'cache frio, ' : ''
-  const math = `${cold}pedágio ${usd(toll)} (${kTok(C)} de contexto), economia estimada ${usd(savings)} em ~${N} passos`
+  const math = `${cold}trocar reescreve ${kTok(C)} de contexto no cache (${share(toll, stayCost)} do custo de ficar), economia estimada ${share(savings, stayCost)} em ~${N} passos`
 
   if (i.forced) {
     return { allow: true, kind: 'forcado', ...numbers, reason: `forçado por você; ${math}` }
   }
   if (isUpgrade) {
-    return { allow: true, kind: 'qualidade', ...numbers, reason: `subiu por qualidade; ${cold}pedágio ${usd(toll)}` }
+    return { allow: true, kind: 'qualidade', ...numbers, reason: `subiu por qualidade; ${cold}reescreve ${kTok(C)} de contexto no cache (${share(toll, stayCost)} do custo de ficar)` }
   }
   const needed = Math.max(MIN_SAVING_USD, MIN_SAVING_SHARE * stayCost)
   if (savings >= needed) {
@@ -118,6 +122,6 @@ export function evaluateSwitch(i: SwitchInput): SwitchVerdict {
     allow: false,
     kind: 'bloqueado-custo',
     ...numbers,
-    reason: `troca não compensa: ${math} (mínimo ${usd(needed)})`,
+    reason: `troca não compensa: ${math} (mínimo ${share(needed, stayCost)})`,
   }
 }

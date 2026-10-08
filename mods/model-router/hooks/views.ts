@@ -9,7 +9,7 @@ import type {
   TurnRecord,
   Verdict,
 } from '../types'
-import { MODELS, PRICES_AS_OF, kTok, usd } from './pricing'
+import { MODELS, kTok } from './pricing'
 
 /** Uma linha do painel, já com o estilo. As visões só produzem linhas; o desenho é um só. */
 export type Line = { text: string; color?: string; bold?: boolean; dim?: boolean; inverse?: boolean }
@@ -54,7 +54,7 @@ export function modelLabel(family: Family, effort?: Effort): string {
   return `${MODELS[family].label}${effort ? ` · ${effort}` : ''}`
 }
 
-function bar(share: number, width = 20): string {
+function bar(share: number, width = 24): string {
   const filled = Math.round(Math.max(0, Math.min(1, share)) * width)
   return '█'.repeat(filled) + '░'.repeat(width - filled)
 }
@@ -63,12 +63,16 @@ function isBlocked(v: Verdict): boolean {
   return v === 'bloqueado-custo' || v === 'bloqueado-contexto'
 }
 
-function pct(part: number, whole: number): string {
+export function pct(part: number, whole: number): string {
   return whole > 0 ? `${Math.round((part / whole) * 100)}%` : '—'
 }
 
 function samePlan(r: { family: Family; effort?: Effort; planFamily: Family; planEffort?: Effort }): boolean {
   return r.family === r.planFamily && (!r.planEffort || r.effort === r.planEffort)
+}
+
+function total(list: readonly TurnRecord[]): number {
+  return list.reduce((sum, r) => sum + r.cost, 0)
 }
 
 /** "2×Haiku 1×Sonnet": os modelos dos subagentes de um turno. */
@@ -87,7 +91,7 @@ function subagentLine(s: SubagentRecord, indent: string): Line {
   return {
     text:
       `${indent}↳ ${s.isDone ? '✓' : '…'} ${pad(s.subagentType, 16)} ${pad(`"${s.description}"`, 34)} ` +
-      `${pad(MODELS[s.family].label, 11)} ${pad(ORIGIN_LABEL[s.origin], 19)} ${s.steps} passos · ${usd(s.cost)}${plan}`,
+      `${pad(MODELS[s.family].label, 11)} ${pad(ORIGIN_LABEL[s.origin], 19)} ${s.steps} passos${plan}`,
     color: s.isDone ? undefined : FAMILY_COLOR[s.family],
     dim: s.isDone,
   }
@@ -99,10 +103,10 @@ export function liveLines(live: LiveTurn | null, idleNext: string | null): Line[
     return [{ text: `● Ocioso${idleNext ? ` · cache quente em: ${idleNext}` : ''}`, dim: true }]
   }
   const shadow =
-    live.mode === 'sombra' && !samePlan(live) ? ` · 👁 roteador usaria ${modelLabel(live.planFamily, live.planEffort)}` : ''
+    live.mode === 'sombra' && !samePlan(live) ? ` · roteador usaria ${modelLabel(live.planFamily, live.planEffort)}` : ''
   return [
     {
-      text: `▶ Rodando agora: ${modelLabel(live.family, live.effort)} · passo ${live.step} · ${usd(live.cost)}${shadow} — "${live.prompt}"`,
+      text: `▶ Rodando agora: ${modelLabel(live.family, live.effort)} · passo ${live.step}${shadow} — "${live.prompt}"`,
       color: FAMILY_COLOR[live.family],
       bold: true,
     },
@@ -110,21 +114,21 @@ export function liveLines(live: LiveTurn | null, idleNext: string | null): Line[
   ]
 }
 
-/** Visão "Turnos": um turno por linha, com o modelo que rodou, o do roteador e os dos subagentes. */
+/** Visão "Turnos": um turno por linha, com o modelo que rodou, o do roteador e a fatia da sessão. */
 export function turnsLines(list: readonly TurnRecord[], selected: number | null, room: number): Line[] {
   if (list.length === 0) return [{ text: 'Nenhum turno ainda. Mande um prompt e ele aparece aqui.', dim: true }]
+  const all = total(list)
   const header =
     `${pad('#', 4)}${pad('Tarefa', 28)}${pad('Nível', 9)}${pad('Rodou em', 19)}${pad('Roteador', 19)}` +
-    `${pad('Subagentes', 16)}${pad('Decisão', 11)}${pad('Custo', 9)}Roteado`
+    `${pad('Subagentes', 16)}${pad('Decisão', 11)}Fatia`
   return [
     { text: header, bold: true },
     ...list.slice(-Math.max(1, room)).map(r => {
-      const plan = samePlan(r) ? '=' : `${r.mode === 'sombra' ? '👁 ' : ''}${modelLabel(r.planFamily, r.planEffort)}`
+      const plan = samePlan(r) ? '=' : modelLabel(r.planFamily, r.planEffort)
       return {
         text:
           `${pad(String(r.id), 4)}${pad(r.prompt, 28)}${pad(r.tier, 9)}${pad(modelLabel(r.family, r.effort), 19)}` +
-          `${pad(plan, 19)}${pad(subagentSummary(r.subagents), 16)}${pad(VERDICT_LABEL[r.verdict], 11)}` +
-          `${pad(usd(r.cost), 9)}${usd(r.routedCost)}`,
+          `${pad(plan, 19)}${pad(subagentSummary(r.subagents), 16)}${pad(VERDICT_LABEL[r.verdict], 11)}${pct(r.cost, all)}`,
         color: isBlocked(r.verdict) ? 'yellow' : FAMILY_COLOR[r.family],
         dim: r.verdict === 'igual' && r.id !== selected,
         inverse: r.id === selected,
@@ -135,12 +139,16 @@ export function turnsLines(list: readonly TurnRecord[], selected: number | null,
 
 type Task = { text: string }
 
-/** Visão "Modelos": quanto cada modelo trabalhou e quais tarefas foram para ele. */
+/**
+ * Visão "Modelos": a fatia de cada modelo nos 100% da sessão e as tarefas de cada um.
+ * A fatia pesa o uso pelo preço de lista: o plano não informa o consumo por modelo,
+ * e 1.000 tokens de Opus gastam mais da cota que 1.000 de Haiku.
+ */
 export function modelsLines(list: readonly TurnRecord[], perModel = 5): Line[] {
   if (list.length === 0) return [{ text: 'Nenhum uso registrado ainda.', dim: true }]
 
-  const total = list.reduce((sum, r) => sum + r.cost, 0)
-  const lines: Line[] = [{ text: 'Uso real por modelo (fio principal + subagentes)', bold: true }]
+  const all = total(list)
+  const lines: Line[] = [{ text: 'Fatia de cada modelo no uso da sessão (soma 100%)', bold: true }]
 
   for (const f of FAMILIES) {
     const uses = list.flatMap(r => r.byModel.filter(m => m.family === f))
@@ -148,28 +156,22 @@ export function modelsLines(list: readonly TurnRecord[], perModel = 5): Line[] {
     const subs = list.flatMap(r => r.subagents.filter(s => s.family === f)).length
     if (uses.length === 0 && turns === 0 && subs === 0) continue
     const cost = uses.reduce((sum, m) => sum + m.cost, 0)
-    const steps = uses.reduce((sum, m) => sum + m.steps, 0)
-    const read = uses.reduce((sum, m) => sum + m.inTok + m.cacheRead + m.cacheWrite, 0)
-    const out = uses.reduce((sum, m) => sum + m.outTok, 0)
-    const share = total > 0 ? cost / total : 0
     lines.push({
       text:
-        `${pad(MODELS[f].label, 11)} ${bar(share)} ${pad(pct(cost, total), 5)}${pad(usd(cost), 9)}` +
-        `${turns} turnos · ${subs} subagentes · ${steps} passos · ${kTok(read)} lidos / ${kTok(out)} gerados`,
+        `${pad(MODELS[f].label, 11)} ${bar(all > 0 ? cost / all : 0)} ${pad(pct(cost, all), 5)}` +
+        `${turns} turnos · ${subs} subagentes`,
       color: FAMILY_COLOR[f],
     })
   }
 
   const unpriced = list.reduce((sum, r) => sum + r.unpricedSteps, 0)
-  if (unpriced > 0) lines.push({ text: `${unpriced} passos de modelos sem preço conhecido ficaram fora das somas (n/d).`, dim: true })
+  if (unpriced > 0) lines.push({ text: `${unpriced} passos de modelos sem preço conhecido ficaram fora da fatia.`, dim: true })
 
-  lines.push(BLANK, { text: 'Tarefas direcionadas a cada modelo (mais recentes primeiro)', bold: true })
+  lines.push(BLANK, { text: 'Tarefas de cada modelo (mais recentes primeiro)', bold: true })
   for (const f of FAMILIES) {
     const tasks: Task[] = []
     for (const r of list) {
-      if (r.family === f) {
-        tasks.push({ text: `  • #${r.id} "${r.prompt}" — ${r.tier}, ${VERDICT_LABEL[r.verdict]}` })
-      }
+      if (r.family === f) tasks.push({ text: `  • #${r.id} "${r.prompt}" — ${r.tier}, ${VERDICT_LABEL[r.verdict]}` })
       for (const s of r.subagents) {
         if (s.family === f) tasks.push({ text: `  ↳ #${r.id} ${s.subagentType} "${s.description}" — ${ORIGIN_LABEL[s.origin]}` })
       }
@@ -179,20 +181,11 @@ export function modelsLines(list: readonly TurnRecord[], perModel = 5): Line[] {
     for (const t of tasks.slice(-perModel).reverse()) lines.push({ text: t.text })
   }
 
-  const verdicts = (Object.keys(VERDICT_LABEL) as Verdict[])
-    .map(v => {
-      const n = list.filter(r => r.verdict === v).length
-      return n > 0 ? `${VERDICT_LABEL[v]} ${n}` : ''
-    })
-    .filter(Boolean)
-    .join(' · ')
-  lines.push(BLANK, { text: 'Decisões da trava de custo', bold: true }, { text: verdicts })
-
   return lines
 }
 
 /** Visão "Detalhe": tudo sobre um turno. */
-export function detailLines(r: TurnRecord | undefined): Line[] {
+export function detailLines(r: TurnRecord | undefined, sessionTotal = 0): Line[] {
   if (!r) return [{ text: 'Nenhum turno para detalhar ainda.', dim: true }]
 
   const plan = samePlan(r)
@@ -217,12 +210,12 @@ export function detailLines(r: TurnRecord | undefined): Line[] {
   for (const m of r.byModel) {
     lines.push({
       text:
-        `  ${pad(MODELS[m.family].label, 11)} ${pad(`${m.steps} passos`, 11)}entrada ${kTok(m.inTok)} · ` +
-        `cache lido ${kTok(m.cacheRead)} · cache escrito ${kTok(m.cacheWrite)} · saída ${kTok(m.outTok)} · ${usd(m.cost)}`,
+        `  ${pad(MODELS[m.family].label, 11)} ${pad(`${m.steps} passos`, 11)}${pad(pct(m.cost, r.cost), 5)} do turno · ` +
+        `entrada ${kTok(m.inTok)} · cache lido ${kTok(m.cacheRead)} · cache escrito ${kTok(m.cacheWrite)} · saída ${kTok(m.outTok)}`,
       color: FAMILY_COLOR[m.family],
     })
   }
-  if (r.unpricedSteps > 0) lines.push({ text: `  + ${r.unpricedSteps} passos sem preço conhecido (n/d)`, dim: true })
+  if (r.unpricedSteps > 0) lines.push({ text: `  + ${r.unpricedSteps} passos sem preço conhecido`, dim: true })
 
   const hasSubs = r.subagents.length > 0
   lines.push(BLANK, { text: hasSubs ? 'Subagentes' : 'Nenhum subagente neste turno.', bold: hasSubs, dim: !hasSubs })
@@ -231,22 +224,24 @@ export function detailLines(r: TurnRecord | undefined): Line[] {
     lines.push({ text: `       motivo: ${s.why}`, dim: true })
   }
 
+  const saved = r.cost > 0 ? Math.round(((r.cost - r.routedCost) / r.cost) * 100) : 0
+  const vsOpus = r.opusCost > 0 ? Math.round(((r.opusCost - r.cost) / r.opusCost) * 100) : 0
   lines.push(BLANK, {
     text:
-      `Custo real ${usd(r.cost)} · Com o roteador ${usd(r.routedCost)} (est.) · ` +
-      `Mesmos tokens no Opus ${usd(r.opusCost)} (est.)`,
+      `Peso na sessão ${pct(r.cost, sessionTotal)} · com o roteador ${saved > 0 ? `${saved}% menos` : 'igual'} (est.) · ` +
+      `vs tudo no Opus ${vsOpus > 0 ? `${vsOpus}% menos` : 'igual'} (est.)`,
     bold: true,
   })
   return lines
 }
 
-/** Visão "Sombra": quanto o roteador teria economizado, sem ter trocado nada. */
+/** Visão "Sombra": quanto o roteador teria poupado, sem ter trocado nada. */
 export function shadowLines(list: readonly TurnRecord[], totals: Totals | null): Line[] {
   const shadow = list.filter(r => r.mode === 'sombra')
   const lines: Line[] = [
     { text: 'Modo sombra: o roteador decide e registra, mas não troca nada.', bold: true },
     {
-      text: `Valores a preço de lista (${PRICES_AS_OF}), estimados localmente. Numa assinatura Pro/Max, leia como "equivalente em API".`,
+      text: 'Percentuais estimados localmente pelo peso do uso (preço de lista). Servem para comparar, não para prever sua cota.',
       dim: true,
     },
     BLANK,
@@ -256,15 +251,13 @@ export function shadowLines(list: readonly TurnRecord[], totals: Totals | null):
   const routed = shadow.reduce((sum, r) => sum + r.routedCost, 0)
   const sample = shadow.length < MIN_SAMPLE ? ` · amostra pequena (n=${shadow.length}), ainda medindo` : ''
   lines.push({
-    text: `Esta sessão: real ${usd(real)} → com o roteador ${usd(routed)} (est.) · economia ${pct(real - routed, real)} · n=${shadow.length}${sample}`,
+    text: `Esta sessão: o roteador teria usado ${pct(real - routed, real)} menos (est.) · n=${shadow.length}${sample}`,
     color: routed < real ? 'green' : undefined,
   })
   if (totals && totals.turns > 0) {
     const since = new Date(totals.since).toISOString().slice(0, 10)
     lines.push({
-      text:
-        `Desde ${since}: real ${usd(totals.cost)} → com o roteador ${usd(totals.routedCost)} (est.) · ` +
-        `economia ${pct(totals.cost - totals.routedCost, totals.cost)} · n=${totals.turns}`,
+      text: `Desde ${since}: ${pct(totals.cost - totals.routedCost, totals.cost)} menos (est.) · n=${totals.turns}`,
     })
   }
 
@@ -281,7 +274,7 @@ export function shadowLines(list: readonly TurnRecord[], totals: Totals | null):
     const b = rows.reduce((sum, r) => sum + r.routedCost, 0)
     const changed = rows.filter(r => !samePlan(r)).length
     lines.push({
-      text: `  ${pad(tier, 9)} ${pad(`${rows.length} turnos`, 10)} mudaria ${pad(String(changed), 4)} real ${pad(usd(a), 8)} → ${pad(usd(b), 8)} (${pct(a - b, a)})`,
+      text: `  ${pad(tier, 9)} ${pad(`${rows.length} turnos`, 10)} mudaria ${pad(String(changed), 4)} usaria ${pct(a - b, a)} menos`,
     })
   }
   const subs = shadow.flatMap(r => r.subagents)
@@ -290,7 +283,7 @@ export function shadowLines(list: readonly TurnRecord[], totals: Totals | null):
     const a = subs.reduce((sum, s) => sum + s.cost, 0)
     const b = subs.reduce((sum, s) => sum + s.routedCost, 0)
     lines.push({
-      text: `  ${pad('subagentes', 9)} ${pad(`${subs.length} tarefas`, 10)} mudaria ${pad(String(routedSubs.length), 4)} real ${pad(usd(a), 8)} → ${pad(usd(b), 8)} (${pct(a - b, a)})`,
+      text: `  ${pad('subagentes', 9)} ${pad(`${subs.length} tarefas`, 10)} mudaria ${pad(String(routedSubs.length), 4)} usaria ${pct(a - b, a)} menos`,
     })
   }
 
@@ -300,19 +293,19 @@ export function shadowLines(list: readonly TurnRecord[], totals: Totals | null):
     lines.push({
       text:
         `  #${pad(String(r.id), 3)} ${pad(`"${r.prompt}"`, 30)} ${pad(modelLabel(r.family, r.effort), 19)} → ` +
-        `${pad(same ? 'igual' : modelLabel(r.planFamily, r.planEffort), 19)} ${usd(r.cost)} → ${usd(r.routedCost)}`,
+        `${same ? 'igual' : modelLabel(r.planFamily, r.planEffort)}`,
       color: same ? undefined : FAMILY_COLOR[r.planFamily],
       dim: same,
     })
     for (const s of r.subagents.filter(x => x.planFamily !== x.family)) {
       lines.push({
-        text: `       ↳ ${s.subagentType} "${s.description}" → ${MODELS[s.planFamily].label} · ${usd(s.cost)} → ${usd(s.routedCost)}`,
+        text: `       ↳ ${s.subagentType} "${s.description}" → ${MODELS[s.planFamily].label}`,
         color: FAMILY_COLOR[s.planFamily],
       })
     }
   }
   lines.push(BLANK, {
-    text: `Com n ≥ ${MIN_SAMPLE} e economia consistente, ative com /router ativo (ou o botão "Ativar"). Logs em ~/.claude/model-router/logs/.`,
+    text: `Com n ≥ ${MIN_SAMPLE} e economia consistente, ative o roteamento. Logs em ~/.claude/model-router/logs/.`,
     dim: true,
   })
   return lines

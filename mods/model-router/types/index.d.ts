@@ -145,6 +145,7 @@ declare module 'claude-code' {
       view: PaneView
       selected: number | null
       totals: Totals
+      confirmReset: boolean
     }
   }
 }
