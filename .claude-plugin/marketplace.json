@@ -1,0 +1,17 @@
+{
+  "name": "my-mods",
+  "owner": {
+    "name": "luis.chaves"
+  },
+  "plugins": [
+    {
+      "name": "model-router",
+      "source": "./mods/model-router",
+      "description": "Roteia tarefas entre Haiku, Sonnet e Opus e bloqueia trocas que custam mais do que economizam.",
+      "author": {
+        "name": "luis.chaves"
+      }
+    }
+  ],
+  "description": "Mods do Luis para o Claude Code"
+}

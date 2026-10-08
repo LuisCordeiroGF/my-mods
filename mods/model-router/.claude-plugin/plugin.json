@@ -1,0 +1,9 @@
+{
+  "name": "model-router",
+  "version": "0.1.0",
+  "description": "Roteia cada tarefa para Haiku, Sonnet ou Opus conforme a complexidade e bloqueia trocas de modelo que custariam mais do que economizam.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "luis.chaves"
+  }
+}
