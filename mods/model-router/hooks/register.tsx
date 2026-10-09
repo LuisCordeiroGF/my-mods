@@ -486,8 +486,9 @@ async function applyQuota($: EngineInterface, limits: readonly RateLimit[]): Pro
       pts = { ...zeroFamilies(), ...saved.points }
       other = saved.other
     } else {
+      // O que a janela já tinha antes desta conversa não é de nenhum modelo daqui.
       pts = zeroFamilies()
-      other = 0
+      other = p
     }
   }
 
@@ -496,7 +497,7 @@ async function applyQuota($: EngineInterface, limits: readonly RateLimit[]): Pro
     (st.lastPercent !== null && p < st.lastPercent)
   if (isNewWindow) {
     pts = zeroFamilies()
-    other = 0
+    other = p
     st.pool = zeroFamilies()
   } else if (st.lastPercent !== null && p > st.lastPercent) {
     const next = attribute(pts, st.pool, other, p - st.lastPercent)
@@ -799,9 +800,10 @@ export const register: Register = on => {
   })
 
   on('prompt.submit', async ($, e, next) => {
-    if (!st.enabled || e.text.trimStart().startsWith('/')) return next(e)
+    const clean = e.text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim()
+    if (!st.enabled || clean === '' || clean.startsWith('/')) return next(e)
 
-    const { forced, text } = parseOverride(e.text)
+    const { forced, text } = parseOverride(clean)
     try {
       const decision = await decide($, text, forced)
       st.pending = { decision, prompt: text, contextTokens: st.contextTokens }
@@ -814,7 +816,7 @@ export const register: Register = on => {
       st.pending = null
     }
 
-    return forced ? next({ ...e, text }) : next(e)
+    return forced ? next({ ...e, text: parseOverride(e.text).text }) : next(e)
   }).catch(($, e, next) => next(e))
 
   on('turn.step', async function* ($, e, next) {

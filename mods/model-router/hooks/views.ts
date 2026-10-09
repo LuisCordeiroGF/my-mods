@@ -189,6 +189,13 @@ export function modelsLines(list: readonly TurnRecord[], quota: Quota | null = n
       color: FAMILY_COLOR[f],
     })
   }
+  const modelPoints = quota ? FAMILIES.reduce((sum, f) => sum + quota.points[f], 0) : 0
+  if (hasQuota && modelPoints <= 0 && list.length > 0) {
+    lines.push({
+      text: 'Ainda sem pontos por modelo: o limite do plano anda de 1 em 1 ponto. O uso já fica na fila e é dividido quando ele andar.',
+      color: 'yellow',
+    })
+  }
   if (hasQuota && quota && quota.other > 0) {
     lines.push({
       text: `${pad('Outros', 11)} ${bar(attributed > 0 ? quota.other / attributed : 0)} ${pad(points(quota.other), 6)}outras sessões ou uso anterior ao mod`,
