@@ -2,6 +2,7 @@ import type {
   Effort,
   Family,
   LiveTurn,
+  Quota,
   SubagentOrigin,
   SubagentRecord,
   Tier,
@@ -69,6 +70,18 @@ export function pct(part: number, whole: number): string {
 
 function samePlan(r: { family: Family; effort?: Effort; planFamily: Family; planEffort?: Effort }): boolean {
   return r.family === r.planFamily && (!r.planEffort || r.effort === r.planEffort)
+}
+
+/** "8,2%": uma casa abaixo de 10, inteiro acima. */
+export function points(n: number): string {
+  return `${n < 10 ? n.toFixed(1).replace('.', ',') : Math.round(n)}%`
+}
+
+function resetLabel(iso?: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return ` · renova ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
 }
 
 function total(list: readonly TurnRecord[]): number {
@@ -144,25 +157,45 @@ type Task = { text: string }
  * A fatia pesa o uso pelo preço de lista: o plano não informa o consumo por modelo,
  * e 1.000 tokens de Opus gastam mais da cota que 1.000 de Haiku.
  */
-export function modelsLines(list: readonly TurnRecord[], perModel = 5): Line[] {
-  if (list.length === 0) return [{ text: 'Nenhum uso registrado ainda.', dim: true }]
+export function modelsLines(list: readonly TurnRecord[], quota: Quota | null = null, perModel = 5): Line[] {
+  if (list.length === 0 && (!quota || quota.session === null)) {
+    return [{ text: 'Nenhum uso registrado ainda.', dim: true }]
+  }
 
   const all = total(list)
-  const lines: Line[] = [{ text: 'Fatia de cada modelo no uso da sessão (soma 100%)', bold: true }]
+  const hasQuota = quota !== null && quota.session !== null
+  const lines: Line[] = [
+    {
+      text: hasQuota
+        ? `Janela de 5 h do plano: ${points(quota.session ?? 0)} usados${resetLabel(quota.resetsAt)}`
+        : 'Fatia de cada modelo no uso da sessão (soma 100%, estimada: sem o limite do plano)',
+      bold: true,
+    },
+  ]
+  if (hasQuota) lines.push({ text: 'Quanto de cada modelo entrou nesses pontos (a soma dos modelos mais "outros" fecha o total)', dim: true })
 
+  const attributed = quota ? FAMILIES.reduce((sum, f) => sum + quota.points[f], 0) + quota.other : 0
   for (const f of FAMILIES) {
     const uses = list.flatMap(r => r.byModel.filter(m => m.family === f))
     const turns = list.filter(r => r.family === f).length
     const subs = list.flatMap(r => r.subagents.filter(s => s.family === f)).length
-    if (uses.length === 0 && turns === 0 && subs === 0) continue
+    const pts = quota ? quota.points[f] : 0
+    if (uses.length === 0 && turns === 0 && subs === 0 && pts <= 0) continue
     const cost = uses.reduce((sum, m) => sum + m.cost, 0)
+    const share = hasQuota ? (attributed > 0 ? pts / attributed : 0) : all > 0 ? cost / all : 0
+    const label = hasQuota ? points(pts) : pct(cost, all)
     lines.push({
-      text:
-        `${pad(MODELS[f].label, 11)} ${bar(all > 0 ? cost / all : 0)} ${pad(pct(cost, all), 5)}` +
-        `${turns} turnos · ${subs} subagentes`,
+      text: `${pad(MODELS[f].label, 11)} ${bar(share)} ${pad(label, 6)}${turns} turnos · ${subs} subagentes`,
       color: FAMILY_COLOR[f],
     })
   }
+  if (hasQuota && quota && quota.other > 0) {
+    lines.push({
+      text: `${pad('Outros', 11)} ${bar(attributed > 0 ? quota.other / attributed : 0)} ${pad(points(quota.other), 6)}outras sessões ou uso anterior ao mod`,
+      dim: true,
+    })
+  }
+  if (hasQuota) lines.push({ text: 'O total vem do plano. A divisão entre modelos é estimada pelo peso do uso.', dim: true })
 
   const unpriced = list.reduce((sum, r) => sum + r.unpricedSteps, 0)
   if (unpriced > 0) lines.push({ text: `${unpriced} passos de modelos sem preço conhecido ficaram fora da fatia.`, dim: true })

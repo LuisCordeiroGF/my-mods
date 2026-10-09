@@ -86,6 +86,19 @@ test('modelos mostram a fatia de cada um e somam 100%', async () => {
   expect(out.includes('$')).toBe(false)
 })
 
+test('modelos usam os pontos reais do limite do plano', async () => {
+  const quota = { session: 10, week: 3, points: { haiku: 2, sonnet: 0, opus: 8, fable: 0 }, other: 0 }
+  const out = text(modelsLines([turn], quota))
+  expect(out.includes('Janela de 5 h do plano: 10% usados')).toBe(true)
+  expect(out.includes('8,0%') || out.includes('8%')).toBe(true)
+  expect(out.includes('2,0%')).toBe(true)
+})
+
+test('outros aparece quando parte do limite não veio do mod', async () => {
+  const quota = { session: 10, week: null, points: { haiku: 0, sonnet: 0, opus: 6, fable: 0 }, other: 4 }
+  expect(text(modelsLines([turn], quota)).includes('Outros')).toBe(true)
+})
+
 test('ao vivo e resumo de subagentes', async () => {
   expect(text(liveLines(null, 'Sonnet 5.5 · medium')).includes('cache quente em: Sonnet 5.5')).toBe(true)
   expect(subagentSummary([])).toBe('—')

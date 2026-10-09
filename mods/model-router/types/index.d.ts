@@ -128,6 +128,18 @@ export type Totals = {
   since: number
 }
 
+/** O limite da janela de 5 h do plano e quanto de cada modelo entrou nele. */
+export type Quota = {
+  /** Porcentagem usada da janela de 5 h; null fora de Pro/Max. */
+  session: number | null
+  week: number | null
+  resetsAt?: string
+  /** Pontos do limite atribuídos a cada modelo, estimados pelo peso do uso. */
+  points: Record<Family, number>
+  /** Pontos que não vieram deste mod (outras sessões ou antes de ele carregar). */
+  other: number
+}
+
 export type PaneView = 'turnos' | 'modelos' | 'detalhe' | 'sombra'
 
 export type Settings = { enabled: boolean; ai: boolean; mode: Mode }
@@ -146,6 +158,7 @@ declare module 'claude-code' {
       selected: number | null
       totals: Totals
       confirmReset: boolean
+      quota: Quota
     }
   }
 }

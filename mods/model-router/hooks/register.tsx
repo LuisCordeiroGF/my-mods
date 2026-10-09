@@ -8,6 +8,7 @@ import type {
   LiveTurn,
   Mode,
   PaneView,
+  Quota,
   Settings,
   Stats,
   SubagentOrigin,
@@ -19,6 +20,8 @@ import type {
 } from '../types'
 import { classify, escalate, parseOverride, parseTier } from './classify'
 import { evaluateSwitch } from './guard'
+import { attribute, zeroFamilies } from './quota'
+import type { FamilyTotals } from './quota'
 import type { Slot } from './guard'
 import {
   MODELS,
@@ -40,6 +43,7 @@ import {
   modelLabel,
   modelsLines,
   pct,
+  points,
   shadowLines,
   subagentSummary,
   turnsLines,
@@ -56,6 +60,12 @@ const bandHidden = atom({ plugin: 'model-router', key: 'bandHidden' } as const, 
 const live = atom({ plugin: 'model-router', key: 'live' } as const, null)
 const view = atom({ plugin: 'model-router', key: 'view' } as const, 'turnos')
 const selected = atom({ plugin: 'model-router', key: 'selected' } as const, null)
+const quota = atom({ plugin: 'model-router', key: 'quota' } as const, {
+  session: null,
+  week: null,
+  points: { haiku: 0, sonnet: 0, opus: 0, fable: 0 },
+  other: 0,
+})
 const confirmReset = atom({ plugin: 'model-router', key: 'confirmReset' } as const, false)
 const totals = atom({ plugin: 'model-router', key: 'totals' } as const, {
   turns: 0,
@@ -116,6 +126,10 @@ const st = {
   /** Custo do classificador por IA, somado ao turno que ele classificou. */
   overhead: 0,
   logPath: '',
+  /** Peso do uso de cada modelo desde a última vez que o limite do plano andou. */
+  pool: zeroFamilies() as FamilyTotals,
+  lastPercent: null as number | null,
+  windowResetsAt: '',
   logLines: [] as string[],
 }
 
@@ -236,6 +250,7 @@ function addUsage(u: TurnUsage | null, agentId: string | undefined, isFirst: boo
     return
   }
   draft.cost += cost
+  st.pool[family] += cost
 
   // "Mesmos tokens no Opus": o Opus teria lido do cache o contexto que uma troca real reescreveu.
   let opus = costOf(u, MODELS.opus.id, ttl) ?? cost
@@ -427,6 +442,16 @@ async function refreshStatus($: EngineInterface): Promise<void> {
   const routed = sum(list, r => r.routedCost)
   const slot = st.warm
   const now = slot ? modelLabel(slot.family, slot.effort) : '—'
+  const q = await read($, quota)
+  if (q.session !== null) {
+    const split = (['haiku', 'sonnet', 'opus', 'fable'] as const)
+      .filter(f => q.points[f] >= 0.05)
+      .map(f => `${MODELS[f].label.split(' ')[0]} ${points(q.points[f])}`)
+      .join(' · ')
+    const prefix = st.mode === 'sombra' ? '👁 sombra' : '⚡'
+    $.ui.status(`${prefix} · ${now} │ janela 5 h ${points(q.session)}${split ? ` · ${split}` : ''}`)
+    return
+  }
   if (st.mode === 'sombra') {
     $.ui.status(`👁 sombra · ${now} │ roteador usaria ${pct(spent - routed, spent)} menos (est.)`)
     return
@@ -434,6 +459,57 @@ async function refreshStatus($: EngineInterface): Promise<void> {
   const saved = sum(list, r => r.opusCost - r.cost)
   const opus = sum(list, r => r.opusCost)
   $.ui.status(`⚡ ${now} │ ${pct(saved, opus)} menos que tudo no Opus (est.)`)
+}
+
+type RateLimit = { kind: string; percentUsed: number; resetsAt?: string }
+
+/**
+ * Lê a janela de 5 h do plano e reparte o que ela andou entre os modelos usados.
+ * O limite só se move de ponto em ponto: o uso fica numa fila até ele andar.
+ */
+async function applyQuota($: EngineInterface, limits: readonly RateLimit[]): Promise<void> {
+  const five = limits.find(l => l.kind === 'five_hour')
+  if (!five) return
+  const week = limits.find(l => l.kind === 'seven_day')
+  const p = five.percentUsed
+  const current = await read($, quota)
+  let pts: FamilyTotals = { ...current.points }
+  let other = current.other
+
+  if (st.lastPercent === null) {
+    // Primeira leitura desta sessão: retoma a conta se ainda for a mesma janela.
+    const saved = (await $.store.get('quota')) as
+      | { resetsAt?: string; lastPercent: number; points: FamilyTotals; other: number }
+      | undefined
+    if (saved && saved.resetsAt && saved.resetsAt === five.resetsAt) {
+      st.lastPercent = saved.lastPercent
+      pts = { ...zeroFamilies(), ...saved.points }
+      other = saved.other
+    } else {
+      pts = zeroFamilies()
+      other = 0
+    }
+  }
+
+  const isNewWindow =
+    (st.windowResetsAt !== '' && five.resetsAt !== undefined && five.resetsAt !== st.windowResetsAt) ||
+    (st.lastPercent !== null && p < st.lastPercent)
+  if (isNewWindow) {
+    pts = zeroFamilies()
+    other = 0
+    st.pool = zeroFamilies()
+  } else if (st.lastPercent !== null && p > st.lastPercent) {
+    const next = attribute(pts, st.pool, other, p - st.lastPercent)
+    pts = next.points
+    other = next.other
+    st.pool = zeroFamilies()
+  }
+
+  st.lastPercent = p
+  if (five.resetsAt) st.windowResetsAt = five.resetsAt
+  const value: Quota = { session: p, week: week?.percentUsed ?? null, resetsAt: five.resetsAt, points: pts, other }
+  await update($, quota, () => value)
+  await $.store.set('quota', { resetsAt: st.windowResetsAt, lastPercent: p, points: pts, other })
 }
 
 async function saveSettings($: EngineInterface): Promise<void> {
@@ -666,6 +742,7 @@ async function runCommand($: EngineInterface, args: string): Promise<{ text: str
     await update($, totals, () => empty)
     await update($, ledger, () => [])
     await update($, selected, () => null)
+    st.pool = zeroFamilies()
     await refreshStatus($)
     return { text: 'Histórico, totais e estatísticas aprendidas zerados (os logs em disco ficam).' }
   }
@@ -712,6 +789,11 @@ export const register: Register = on => {
   on('session.measure', ($, e, next) => {
     if (e.context.tokens) st.contextTokens = e.context.tokens
     if (e.rateLimits.length > 0) st.isSubscription = true
+    if (e.rateLimits.length > 0) {
+      applyQuota($, e.rateLimits)
+        .then(() => refreshStatus($))
+        .catch(() => undefined)
+    }
 
     return next(e)
   })
@@ -811,6 +893,7 @@ export const register: Register = on => {
     const pick = await read($, selected)
     const allTime = await read($, totals)
     const askReset = await read($, confirmReset)
+    const quotaNow = await read($, quota)
 
     const idleNext = st.warm ? modelLabel(st.warm.family, st.warm.effort) : null
     const top = liveLines(now, idleNext)
@@ -820,7 +903,7 @@ export const register: Register = on => {
     const sessionTotal = sum(list, r => r.cost)
     const body: Line[] =
       tab === 'modelos'
-        ? modelsLines(list)
+        ? modelsLines(list, quotaNow)
         : tab === 'detalhe'
           ? detailLines(list.find(r => r.id === shownId), sessionTotal)
           : tab === 'sombra'
