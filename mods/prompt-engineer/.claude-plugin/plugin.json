@@ -1,0 +1,9 @@
+{
+  "name": "prompt-engineer",
+  "version": "0.1.0",
+  "description": "Botão acima do prompt que transforma o rascunho em um prompt bem estruturado (engenheiro de prompt), com modos e perguntas guiadas, editável antes de enviar.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "luis.chaves"
+  }
+}

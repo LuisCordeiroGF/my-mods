@@ -11,6 +11,14 @@
       "author": {
         "name": "luis.chaves"
       }
+    },
+    {
+      "name": "prompt-engineer",
+      "source": "./mods/prompt-engineer",
+      "description": "Transforma o rascunho do chat em um prompt bem estruturado, com modos e perguntas guiadas.",
+      "author": {
+        "name": "luis.chaves"
+      }
     }
   ],
   "description": "Mods do Luis para o Claude Code"
