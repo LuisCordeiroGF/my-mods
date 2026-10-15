@@ -29,3 +29,20 @@ Botão acima do campo de texto que transforma o rascunho do chat em um prompt be
 ```
 /plugin install prompt-engineer --marketplace LuisCordeiroGF/my-mods
 ```
+
+## session-stats
+
+Mostra, no rodapé do prompt, se o cache da sessão ainda está quente: um círculo que esvazia conforme o TTL passa e muda de laranja (quente) para azul (frio), com o tempo restante ao lado.
+
+- **Cartão:** clique no tempo para abrir, acima do prompt, o estado do cache, quanto do último turno veio do cache, o contexto e os tokens da sessão.
+- **Avisos:** notificação 5 min antes do cache esfriar; confirmação antes de trocar de modelo com o cache quente (a troca descarta o cache); alerta quando o contexto passa de 80% e de 90% do limite do auto-compact.
+- **`/sessao`:** relatório completo, com o contexto por categoria e uma explicação de como o cache funciona.
+- **TTL:** 1h por padrão; mude para 5 min na opção `cacheTtl` se a sua conta usar o TTL curto. O mod também reduz para 5 min sozinho quando um turno mostra o cache expirando antes.
+
+Os totais de tokens contam a partir de quando o mod carrega na sessão.
+
+### Instalação
+
+```
+/plugin install session-stats --marketplace LuisCordeiroGF/my-mods
+```

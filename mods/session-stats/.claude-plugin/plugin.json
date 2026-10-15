@@ -1,0 +1,18 @@
+{
+  "name": "session-stats",
+  "version": "0.1.0",
+  "description": "Círculo no rodapé do prompt que mostra se o cache está quente (laranja → azul), com contexto e tokens da sessão, avisos antes do cache esfriar, ao trocar de modelo e perto do auto-compact.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "luis.chaves"
+  },
+  "userConfig": {
+    "cacheTtl": {
+      "type": "string",
+      "title": "TTL do cache",
+      "description": "Quanto tempo o prompt cache fica quente depois da última resposta",
+      "options": ["1h", "5m"],
+      "default": "1h"
+    }
+  }
+}

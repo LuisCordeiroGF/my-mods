@@ -19,6 +19,14 @@
       "author": {
         "name": "luis.chaves"
       }
+    },
+    {
+      "name": "session-stats",
+      "source": "./mods/session-stats",
+      "description": "Mostra se o cache está quente, o contexto e os tokens da sessão, e avisa antes de perder o cache.",
+      "author": {
+        "name": "luis.chaves"
+      }
     }
   ],
   "description": "Mods do Luis para o Claude Code"
