@@ -46,6 +46,40 @@ async function effectiveTtl($: EngineInterface, configuredTtl: number): Promise<
   return held > 0 ? held : configuredTtl
 }
 
+// A native Windows toast through PowerShell's WinRT bindings; the texts ride in
+// the environment, so nothing in them is ever read as script.
+const WINDOWS_TOAST = [
+  '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null',
+  '$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)',
+  "$texts = $xml.GetElementsByTagName('text')",
+  '$texts.Item(0).AppendChild($xml.CreateTextNode($env:SESSION_STATS_TITLE)) > $null',
+  '$texts.Item(1).AppendChild($xml.CreateTextNode($env:SESSION_STATS_BODY)) > $null',
+  '$toast = [Windows.UI.Notifications.ToastNotification]::new($xml)',
+  "$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe'",
+  '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show($toast)',
+].join('; ')
+
+/**
+ * A system notification. `$.ui.notify` writes through a terminal, so the
+ * desktop app (no terminal) answers `no-surface`; there a Windows toast is
+ * raised instead. Resolves how it went, for /sessao-aviso to report.
+ */
+async function notify($: EngineInterface, title: string, body: string): Promise<string> {
+  const sent = await $.ui.notify(body, { title })
+  if (sent.isSent) return `enviada pelo terminal (${sent.channel})`
+  try {
+    const run = await $.process.run(
+      ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', WINDOWS_TOAST],
+      { env: { SESSION_STATS_TITLE: title, SESSION_STATS_BODY: body }, timeoutMs: 15_000 },
+    )
+    return run.exitCode === 0
+      ? 'enviada como notificação do Windows'
+      : `falhou no Windows (código ${run.exitCode}): ${run.stderr.trim().slice(0, 300)}`
+  } catch (error) {
+    return `não enviada: o terminal respondeu "${sent.reason}" e o PowerShell não rodou (${String(error).slice(0, 200)})`
+  }
+}
+
 /** Reads where auto-compact will run; `summary` estimates locally and sends nothing. */
 async function refreshCompactAt($: EngineInterface): Promise<void> {
   const usage = await $.session.usage({ breakdown: 'summary' })
@@ -64,7 +98,7 @@ async function checkWarnings($: EngineInterface, configuredTtl: number): Promise
     const tokens = ctx?.tokens == null ? 'o contexto' : `${compact(ctx.tokens)} tokens`
     const text = `O cache expira em 5 min. Mande o próximo prompt antes para reaproveitar ${tokens}.`
     $.ui.toast(`⏳ ${text}`)
-    void $.ui.notify(text, { title: 'Cache do Claude' })
+    await notify($, 'Cache do Claude', text)
   }
 
   const threshold = await read($, compactAt)
@@ -95,6 +129,10 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: 'sessao',
       description: 'Detalha contexto, tokens e cache desta sessão',
+    })
+    await $.command.register({
+      name: 'sessao-aviso',
+      description: 'Envia agora uma notificação de teste do aviso de cache',
     })
 
     // Clear what earlier versions left on screen: the status line and the side pane.
@@ -284,6 +322,15 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
+  })
+
+  on('command.run', { command: 'sessao-aviso' }, async $ => {
+    const how = await notify(
+      $,
+      'Cache do Claude (teste)',
+      'Assim chega o aviso de que o cache expira em 5 min.',
+    )
+    return { text: `Notificação de teste: ${how}.` }
   })
 
   on('command.run', { command: 'sessao' }, async $ => {
